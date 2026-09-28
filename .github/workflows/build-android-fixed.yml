@@ -23,8 +23,8 @@ on:
       - '*.targets'
       - '*.sln'
       - '*.csproj'
-      - 'build.sh'
-      - '.github/workflows/build-android.yml'
+      - 'OpenTaiko.Android/scripts/**'
+      - '.github/workflows/build-android-fixed.yml'
 
 permissions:
   contents: read
@@ -57,6 +57,7 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --install \
             "platform-tools" \
+            "platforms;android-34" \
             "build-tools;35.0.0"
 
       - name: Install .NET Android workload
@@ -67,7 +68,7 @@ jobs:
 
       - name: Make build script executable
         shell: bash
-        run: chmod +x ./build.sh
+        run: chmod +x ./OpenTaiko.Android/scripts/build.sh
 
       - name: Show build environment
         shell: bash
@@ -77,7 +78,7 @@ jobs:
           dotnet --info
           java -version
           adb version
-          ./build.sh --help
+          ./OpenTaiko.Android/scripts/build.sh --help
 
       - name: Build Android APK
         shell: bash
@@ -85,9 +86,9 @@ jobs:
           CONFIGURATION: ${{ github.event.inputs.configuration || 'Release' }}
         run: |
           if [ "$CONFIGURATION" = "Debug" ]; then
-            ./build.sh --clean
+            ./OpenTaiko.Android/scripts/build.sh --clean
           else
-            ./build.sh --clean --release
+            ./OpenTaiko.Android/scripts/build.sh --clean --release
           fi
 
       - name: Find APKs
