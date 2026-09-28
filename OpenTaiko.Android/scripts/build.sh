@@ -7,6 +7,7 @@
 #   download-ffmpeg.ps1
 #   make-appicons.py
 #   make-songs-zip.ps1
+#   fetch-ffmpeg-autogen.ps1 (now automatic)
 #
 # Usage:
 #   ./build.sh [options]
@@ -16,29 +17,24 @@
 #   --install                 Install the APK to a connected device/emulator
 #   --run                     Install, then launch the app
 #   --clean                   Remove OpenTaiko.Android/obj and bin before building
-#   --bundle-songs             Bundle the song library into the APK
-#   --push-songs               Push the song library to the device with adb
-#   --songs-path PATH          Song folder for --bundle-songs/--push-songs
-#   --android-sdk PATH         Android SDK root
-#   --java-sdk PATH             JDK root (JDK 17 required)
-#   --make-icons               Generate Android launcher icons
-#   --make-songs-zip SRC ZIP   Create a filtered songs ZIP and exit
-#   --download-bass            Download BASS natives
-#   --download-ffmpeg          Download FFmpeg natives
-#   --help                     Show this help
+#   --bundle-songs            Bundle the song library into the APK
+#   --push-songs              Push the song library to the device with adb
+#   --songs-path PATH         Song folder for --bundle-songs/--push-songs
+#   --android-sdk PATH        Android SDK root
+#   --java-sdk PATH           JDK root (JDK 17 required)
+#   --make-icons              Generate Android launcher icons
+#   --make-songs-zip SRC ZIP  Create a filtered songs ZIP and exit
+#   --download-bass           Download BASS natives
+#   --download-ffmpeg         Download FFmpeg natives
+#   --fetch-ffmpeg-autogen    Fetch and patch FFmpeg.AutoGen source
+#   --help                    Show this help
 #
 # If no action-only option is supplied, the normal Android build is performed.
 #
 # Requirements:
 #   bash, curl, unzip, zip (optional; song ZIP uses Python if available),
-#   dotnet with the Android workload, JDK 17, Android SDK/platform-tools,
-#   Python 3 + Pillow for --make-icons.
-#
-# NOTE:
-# The original build.ps1 also referenced fetch-ffmpeg-autogen.ps1, but that file
-# was not among the supplied scripts. This Linux script therefore checks for the
-# vendored FFmpeg.AutoGen source and tells you what is missing rather than
-# silently changing that part of the build.
+#   git (for FFmpeg.AutoGen fetch), dotnet with the Android workload,
+#   JDK 17, Android SDK/platform-tools, Python 3 + Pillow for --make-icons.
 
 set -euo pipefail
 
@@ -57,6 +53,7 @@ PUSH_SONGS=0
 MAKE_ICONS=0
 DOWNLOAD_BASS=0
 DOWNLOAD_FFMPEG=0
+FETCH_FFMPEG_AUTOGEN=0
 SONGS_PATH=""
 ANDROID_SDK=""
 JAVA_SDK=""
@@ -80,6 +77,7 @@ while (($#)); do
         --make-icons) MAKE_ICONS=1 ;;
         --download-bass) DOWNLOAD_BASS=1 ;;
         --download-ffmpeg) DOWNLOAD_FFMPEG=1 ;;
+        --fetch-ffmpeg-autogen) FETCH_FFMPEG_AUTOGEN=1 ;;
         --songs-path)
             (($# >= 2)) || die "--songs-path requires a path"
             SONGS_PATH="$2"; shift
@@ -193,6 +191,46 @@ find_java_sdk() {
     die "No JDK 17 found. Install JDK 17 or pass --java-sdk PATH."
 }
 
+# ------------------------------ FFmpeg.AutoGen --------------------------------
+
+fetch_ffmpeg_autogen() {
+    need_cmd git
+
+    local dest="$REPO/third_party/FFmpeg.AutoGen/upstream"
+
+    if [[ -f "$dest/FFmpeg.cs" ]]; then
+        log "FFmpeg.AutoGen upstream/ already present"
+        return
+    fi
+
+    local commit="40873965266b526eeb7982ad45b1e51957eb5411"
+    local repo_url="https://github.com/Ruslan-B/FFmpeg.AutoGen"
+
+    local work
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' RETURN
+
+    log "Fetching FFmpeg.AutoGen from $repo_url @ $commit..."
+
+    git -C "$work" init -q
+    git -C "$work" remote add origin "$repo_url"
+    git -C "$work" fetch -q --depth 1 origin "$commit" || die "Failed to fetch FFmpeg.AutoGen"
+    git -C "$work" checkout -q FETCH_HEAD -- FFmpeg.AutoGen || die "Failed to checkout FFmpeg.AutoGen"
+
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    cp -R "$work/FFmpeg.AutoGen/." "$dest/" || die "Failed to copy FFmpeg.AutoGen"
+    rm -f "$dest/FFmpeg.AutoGen.csproj"
+
+    log "Applying iOS Darwin fallback patch..."
+    patch -p1 -d "$dest" < "$REPO/third_party/FFmpeg.AutoGen/ios-darwin-fallback.patch" || die "Failed to apply iOS patch"
+
+    log "Applying Android Bionic fallback patch..."
+    patch -p1 -d "$dest" < "$REPO/third_party/FFmpeg.AutoGen/android-bionic-fallback.patch" || die "Failed to apply Android patch"
+
+    log "FFmpeg.AutoGen fetched and patched -> $dest"
+}
+
 # ------------------------------ BASS ----------------------------------------
 
 download_bass() {
@@ -218,12 +256,12 @@ download_bass() {
 
         if [[ ! -f "$zipfile" ]]; then
             log "Downloading $pkg..."
-            curl -fL --retry 3 --retry-delay 2 "$url" -o "$zipfile"
+            curl -fL --retry 3 --retry-delay 2 "$url" -o "$zipfile" || die "Failed to download $pkg"
         fi
 
         rm -rf "$dst"
         mkdir -p "$dst"
-        unzip -q "$zipfile" -d "$dst"
+        unzip -q "$zipfile" -d "$dst" || die "Failed to extract $zipfile"
 
         for abi in "${abis[@]}"; do
             libdir="$ROOT/jniLibs/$abi"
@@ -240,7 +278,7 @@ download_bass() {
     log "Done. jniLibs/ now holds the BASS natives."
 }
 
-# ------------------------------ FFmpeg --------------------------------------
+# ------------------------------ FFmpeg natives -------------------------------
 
 download_ffmpeg() {
     need_cmd curl
@@ -264,17 +302,16 @@ download_ffmpeg() {
         if [[ ! -f "$jar" ]]; then
             log "Downloading ffmpeg $version $classifier..."
             curl -fL --retry 3 --retry-delay 2 \
-                "$base/ffmpeg-$version-$classifier.jar" -o "$jar"
+                "$base/ffmpeg-$version-$classifier.jar" -o "$jar" || die "Failed to download ffmpeg"
         fi
 
         libdir="$ROOT/jniLibs/$abi"
         mkdir -p "$libdir"
 
-        # JARs are ZIP files. Extract only the requested .so files.
         local unpack="$tmp/extract-$classifier"
         rm -rf "$unpack"
         mkdir -p "$unpack"
-        unzip -q "$jar" -d "$unpack"
+        unzip -q "$jar" -d "$unpack" || die "Failed to extract $jar"
 
         for name in "${wanted[@]}"; do
             found="$(find "$unpack" -type f -name "$name" -print -quit)"
@@ -287,7 +324,7 @@ download_ffmpeg() {
     log "Done. jniLibs/ now holds the FFmpeg natives."
 }
 
-# ------------------------------ icons ---------------------------------------
+# ------------------------------ icons ----------------------------------------
 
 make_icons() {
     need_cmd python3
@@ -357,7 +394,7 @@ print("icons written under", RES)
 PY
 }
 
-# ------------------------------ songs ZIP -----------------------------------
+# ------------------------------ songs ZIP ------------------------------------
 
 make_songs_zip() {
     local source="$1"
@@ -369,8 +406,6 @@ make_songs_zip() {
     mkdir -p "$(dirname "$destination")"
     rm -f "$destination"
 
-    # Python's stdlib ZIP implementation is used so this also works when `zip`
-    # is not installed. Compression level 1 matches the original "Fastest".
     need_cmd python3
     python3 - "$source" "$destination" <<'PY'
 import os
@@ -389,13 +424,11 @@ with zipfile.ZipFile(
     compresslevel=1,
 ) as z:
     for root, dirs, files in os.walk(source):
-        # Do not descend into any dot-directory, matching the PowerShell script.
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for name in files:
             if name.lower() in junk:
                 continue
             if name.startswith("."):
-                # The original script skips any path segment beginning with ".".
                 continue
 
             full = os.path.join(root, name)
@@ -415,7 +448,7 @@ if count == 0:
 PY
 }
 
-# ------------------------------ main build ----------------------------------
+# ------------------------------ main build -----------------------------------
 
 check_android_workload() {
     need_cmd dotnet
@@ -440,11 +473,8 @@ check_prerequisites() {
     fi
 
     if [[ ! -f "$autogen" ]]; then
-        die "Vendored FFmpeg.AutoGen source missing:
-$autogen
-
-The original build script called fetch-ffmpeg-autogen.ps1 here, but that script
-was not supplied with the files being merged. Add/fetch that source first."
+        log "FFmpeg.AutoGen upstream source missing -> fetching"
+        fetch_ffmpeg_autogen
     fi
 }
 
@@ -466,7 +496,6 @@ build_app() {
     )
 
     if [[ "$CONFIG" == "Release" ]]; then
-        # Preserve the original workaround from build.ps1.
         args+=("-p:Optimize=false")
     fi
 
@@ -474,8 +503,6 @@ build_app() {
         resolve_songs_path
 
         local bytes
-        bytes="$(du -sb "$SONGS_ABS" | awk '{print $1}')"
-        # The original filter excludes dot-paths, so calculate the filtered size.
         bytes="$(python3 - "$SONGS_ABS" <<'PY'
 import os, sys
 root = os.path.abspath(sys.argv[1])
@@ -484,9 +511,6 @@ for base, dirs, files in os.walk(root):
     dirs[:] = [d for d in dirs if not d.startswith(".")]
     for f in files:
         if f.lower() in {"thumbs.db", "desktop.ini"}:
-            # Keep the size check close to the original build.ps1's dot-filter.
-            # Windows junk was not excluded by that size check, so only skip
-            # dot-paths here.
             pass
         p = os.path.join(base, f)
         rel = os.path.relpath(p, root)
@@ -500,7 +524,7 @@ print(total)
 PY
 )"
         if ((bytes > 1800 * 1000 * 1000)); then
-            die "$(awk -v b="$bytes" 'BEGIN {printf "Songs folder is %.1f GB - too big to bundle (APKs are 32-bit zips; past ~2 GB they fail to install). Use --push-songs, or point --songs-path at a smaller folder."}')"
+            die "Songs folder is too large to bundle (~>2 GB). Use --push-songs or point --songs-path at a smaller folder."
         fi
 
         log "Bundling songs: $SONGS_ABS ($(awk -v b="$bytes" 'BEGIN {printf "%.0f MB", b/1000000}'))"
@@ -532,12 +556,6 @@ PY
     fi
 }
 
-adb_cmd() {
-    local adb="$ANDROID_SDK/platform-tools/adb"
-    [[ -x "$adb" ]] || die "adb not found under $ANDROID_SDK/platform-tools. Install Android SDK Platform-Tools."
-    printf '%s\0' "$adb"
-}
-
 push_songs() {
     resolve_songs_path
     local adb="$ANDROID_SDK/platform-tools/adb"
@@ -562,7 +580,7 @@ run_app() {
     log "Logs: adb logcat -s OpenTaiko AndroidRuntime mono-stdout"
 }
 
-# ------------------------------ action dispatch -----------------------------
+# ------------------------------ action dispatch -------------------------------
 
 if [[ -n "${MAKE_SONGS_ZIP_SRC:-}" ]]; then
     make_songs_zip "$MAKE_SONGS_ZIP_SRC" "$MAKE_SONGS_ZIP_DST"
@@ -581,8 +599,12 @@ if ((DOWNLOAD_FFMPEG)); then
     download_ffmpeg
 fi
 
+if ((FETCH_FFMPEG_AUTOGEN)); then
+    fetch_ffmpeg_autogen
+fi
+
 # Action-only invocations do not need a full Android SDK/build.
-if ((MAKE_ICONS || DOWNLOAD_BASS || DOWNLOAD_FFMPEG)) &&
+if ((MAKE_ICONS || DOWNLOAD_BASS || DOWNLOAD_FFMPEG || FETCH_FFMPEG_AUTOGEN)) &&
    ((INSTALL == 0 && RUN_APP == 0 && CLEAN == 0 && BUNDLE_SONGS == 0 && PUSH_SONGS == 0)) &&
    [[ "$CONFIG" == "Debug" ]]; then
     exit 0
