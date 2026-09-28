@@ -43,8 +43,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$SCRIPT_DIR"
-REPO="$(cd "$ROOT/.." && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO="$(cd "$APP_DIR/.." && pwd)"
+ROOT="$APP_DIR"
 CSPROJ="$ROOT/OpenTaiko.Android.csproj"
 
 CONFIG="Debug"
