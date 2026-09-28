@@ -148,6 +148,33 @@ find_android_sdk() {
     die "Android SDK not found. Install it or pass --android-sdk PATH."
 }
 
+find_android_sdk() {
+    if [[ -n "$ANDROID_SDK" && -d "$ANDROID_SDK/platforms" ]]; then
+        ANDROID_SDK="$(cd "$ANDROID_SDK" && pwd)"
+        return
+    fi
+
+    local candidates=()
+    [[ -n "${ANDROID_HOME:-}" ]] && candidates+=("$ANDROID_HOME")
+    [[ -n "${ANDROID_SDK_ROOT:-}" ]] && candidates+=("$ANDROID_SDK_ROOT")
+    candidates+=(
+        "/usr/local/lib/android/sdk"
+        "/opt/android-sdk"
+        "/android-sdk"
+        "$HOME/Android/Sdk"
+        "$HOME/.android/sdk"
+    )
+
+    for p in "${candidates[@]}"; do
+        if [[ -d "$p/platforms" ]] || [[ -x "$p/cmdline-tools/latest/bin/sdkmanager" ]]; then
+            ANDROID_SDK="$(cd "$p" && pwd)"
+            return
+        fi
+    done
+
+    die "Android SDK not found. Install it or pass --android-sdk PATH."
+}
+
 find_java_sdk() {
     if [[ -n "$JAVA_SDK" && -x "$JAVA_SDK/bin/java" ]]; then
         JAVA_SDK="$(cd "$JAVA_SDK" && pwd)"
@@ -157,6 +184,8 @@ find_java_sdk() {
     local candidates=()
     [[ -n "${JAVA_HOME:-}" ]] && candidates+=("$JAVA_HOME")
     candidates+=(
+        "/usr/lib/jvm/temurin-17-jdk-amd64"
+        "/usr/lib/jvm/java-17-openjdk-amd64"
         "$HOME/.local/share/JetBrains/Toolbox/apps/AndroidStudio"/*/*/*/jbr
         "$HOME/android-studio/jbr"
         "/opt/android-studio/jbr"
@@ -165,6 +194,28 @@ find_java_sdk() {
         "/usr/lib/jvm/default-java"
     )
 
+    local p
+    for p in "${candidates[@]}"; do
+        [[ -n "$p" ]] || continue
+        [[ -x "$p/bin/java" ]] || continue
+        if "$p/bin/java" -version 2>&1 | grep -qE 'version "17(\.|")'; then
+            JAVA_SDK="$(cd "$p" && pwd)"
+            return
+        fi
+    done
+
+    if command -v java >/dev/null 2>&1; then
+        local java_bin java_home
+        java_bin="$(readlink -f "$(command -v java)")"
+        java_home="$(dirname "$(dirname "$java_bin")")"
+        if "$java_home/bin/java" -version 2>&1 | grep -qE 'version "17(\.|")'; then
+            JAVA_SDK="$java_home"
+            return
+        fi
+    fi
+
+    die "No JDK 17 found. Install JDK 17 or pass --java-sdk PATH."
+}
     local p
     for p in "${candidates[@]}"; do
         [[ -x "$p/bin/java" ]] || continue
