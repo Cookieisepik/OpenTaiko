@@ -205,8 +205,8 @@ fetch_ffmpeg_autogen() {
 
     local commit="40873965266b526eeb7982ad45b1e51957eb5411"
     local repo_url="https://github.com/Ruslan-B/FFmpeg.AutoGen"
-
     local work
+
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' RETURN
 
