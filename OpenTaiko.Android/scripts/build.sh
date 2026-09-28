@@ -134,30 +134,6 @@ find_android_sdk() {
     [[ -n "${ANDROID_HOME:-}" ]] && candidates+=("$ANDROID_HOME")
     [[ -n "${ANDROID_SDK_ROOT:-}" ]] && candidates+=("$ANDROID_SDK_ROOT")
     candidates+=(
-        "$HOME/Android/Sdk"
-        "$HOME/.android/sdk"
-    )
-
-    for p in "${candidates[@]}"; do
-        if [[ -d "$p/platforms" ]]; then
-            ANDROID_SDK="$(cd "$p" && pwd)"
-            return
-        fi
-    done
-
-    die "Android SDK not found. Install it or pass --android-sdk PATH."
-}
-
-find_android_sdk() {
-    if [[ -n "$ANDROID_SDK" && -d "$ANDROID_SDK/platforms" ]]; then
-        ANDROID_SDK="$(cd "$ANDROID_SDK" && pwd)"
-        return
-    fi
-
-    local candidates=()
-    [[ -n "${ANDROID_HOME:-}" ]] && candidates+=("$ANDROID_HOME")
-    [[ -n "${ANDROID_SDK_ROOT:-}" ]] && candidates+=("$ANDROID_SDK_ROOT")
-    candidates+=(
         "/usr/local/lib/android/sdk"
         "/opt/android-sdk"
         "/android-sdk"
@@ -198,7 +174,7 @@ find_java_sdk() {
     for p in "${candidates[@]}"; do
         [[ -n "$p" ]] || continue
         [[ -x "$p/bin/java" ]] || continue
-        if "$p/bin/java" -version 2>&1 | grep -qE 'version "17(\.|")'; then
+        if "$p/bin/java" -version 2>&1 | grep -qE 'version "17(\.|\")'; then
             JAVA_SDK="$(cd "$p" && pwd)"
             return
         fi
@@ -208,29 +184,7 @@ find_java_sdk() {
         local java_bin java_home
         java_bin="$(readlink -f "$(command -v java)")"
         java_home="$(dirname "$(dirname "$java_bin")")"
-        if "$java_home/bin/java" -version 2>&1 | grep -qE 'version "17(\.|")'; then
-            JAVA_SDK="$java_home"
-            return
-        fi
-    fi
-
-    die "No JDK 17 found. Install JDK 17 or pass --java-sdk PATH."
-}
-    local p
-    for p in "${candidates[@]}"; do
-        [[ -x "$p/bin/java" ]] || continue
-        if "$p/bin/java" -version 2>&1 | grep -qE 'version "17(\.|")'; then
-            JAVA_SDK="$(cd "$p" && pwd)"
-            return
-        fi
-    done
-
-    # Last resort: use java from PATH if it is JDK 17.
-    if command -v java >/dev/null 2>&1; then
-        local java_bin java_home
-        java_bin="$(readlink -f "$(command -v java)")"
-        java_home="$(dirname "$(dirname "$java_bin")")"
-        if "$java_home/bin/java" -version 2>&1 | grep -qE 'version "17(\.|")'; then
+        if "$java_home/bin/java" -version 2>&1 | grep -qE 'version "17(\.|\")'; then
             JAVA_SDK="$java_home"
             return
         fi
@@ -546,7 +500,7 @@ print(total)
 PY
 )"
         if ((bytes > 1800 * 1000 * 1000)); then
-            die "$(awk -v b="$bytes" 'BEGIN {printf "Songs folder is %.1f GB - too big to bundle (APKs are 32-bit zips; past ~2 GB they fail to install). Use --push-songs, or point --songs-path at a subset.\n", b/1000000000}')"
+            die "$(awk -v b="$bytes" 'BEGIN {printf "Songs folder is %.1f GB - too big to bundle (APKs are 32-bit zips; past ~2 GB they fail to install). Use --push-songs, or point --songs-path at a smaller folder."}')"
         fi
 
         log "Bundling songs: $SONGS_ABS ($(awk -v b="$bytes" 'BEGIN {printf "%.0f MB", b/1000000}'))"
