@@ -208,26 +208,30 @@ fetch_ffmpeg_autogen() {
     local work
 
     work="$(mktemp -d)"
-    trap 'rm -rf "$work"' RETURN
+    local cleanup_work
+    cleanup_work() {
+        rm -rf "$work"
+    }
 
     log "Fetching FFmpeg.AutoGen from $repo_url @ $commit..."
 
     git -C "$work" init -q
     git -C "$work" remote add origin "$repo_url"
-    git -C "$work" fetch -q --depth 1 origin "$commit" || die "Failed to fetch FFmpeg.AutoGen"
-    git -C "$work" checkout -q FETCH_HEAD -- FFmpeg.AutoGen || die "Failed to checkout FFmpeg.AutoGen"
+    git -C "$work" fetch -q --depth 1 origin "$commit" || { cleanup_work; die "Failed to fetch FFmpeg.AutoGen"; }
+    git -C "$work" checkout -q FETCH_HEAD -- FFmpeg.AutoGen || { cleanup_work; die "Failed to checkout FFmpeg.AutoGen"; }
 
     rm -rf "$dest"
     mkdir -p "$dest"
-    cp -R "$work/FFmpeg.AutoGen/." "$dest/" || die "Failed to copy FFmpeg.AutoGen"
+    cp -R "$work/FFmpeg.AutoGen/." "$dest/" || { cleanup_work; die "Failed to copy FFmpeg.AutoGen"; }
     rm -f "$dest/FFmpeg.AutoGen.csproj"
 
     log "Applying iOS Darwin fallback patch..."
-    patch -p1 -d "$dest" < "$REPO/third_party/FFmpeg.AutoGen/ios-darwin-fallback.patch" || die "Failed to apply iOS patch"
+    patch -p1 -d "$dest" < "$REPO/third_party/FFmpeg.AutoGen/ios-darwin-fallback.patch" || { cleanup_work; die "Failed to apply iOS patch"; }
 
     log "Applying Android Bionic fallback patch..."
-    patch -p1 -d "$dest" < "$REPO/third_party/FFmpeg.AutoGen/android-bionic-fallback.patch" || die "Failed to apply Android patch"
+    patch -p1 -d "$dest" < "$REPO/third_party/FFmpeg.AutoGen/android-bionic-fallback.patch" || { cleanup_work; die "Failed to apply Android patch"; }
 
+    cleanup_work
     log "FFmpeg.AutoGen fetched and patched -> $dest"
 }
 
